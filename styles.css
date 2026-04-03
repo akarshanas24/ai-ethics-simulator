@@ -483,7 +483,7 @@ textarea {
 
 .hero-section p {
     color: rgba(255, 255, 255, 0.95);
-    font-size: clamp(1rem, 4vw, 1.35rem);
+    font-size: clamp(1rem, 6vw, 1.7rem);
     max-width: 700px;
     margin: 0 auto var(--spacing-lg);
 }
@@ -928,7 +928,7 @@ textarea {
 
 .stage-card:hover {
     border-color: var(--primary);
-    bg: var(--primary);
+    background-color: var(--primary);
 }
 
 .stage-number {

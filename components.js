@@ -1,4 +1,5 @@
 // ==================== COMPONENT RENDERING ====================
+console.log('✅ components.js loaded');
 
 /**
  * Render the Home Page
@@ -8,7 +9,7 @@ function renderHomePage(onStartClick) {
         <div class="page active" data-page="home">
             <!-- Hero Section -->
             <div class="hero-section">
-                <div class="container-md">
+                <div class="container-md ">
                     <h1>AI Ethics Simulator</h1>
                     <p>Simulate multi-agent debates on AI ethics in real-time. Explore complex ethical dilemmas through diverse AI perspectives.</p>
                     <button class="btn btn-primary btn-large" id="hero-start-btn">
@@ -402,9 +403,7 @@ function updateAgentUI(selectedIndices) {
 /**
  * Render the Debate/Simulation Page
  */
-function renderDebatePage(scenario, selectedAgentIndices) {
-    const agents = selectedAgentIndices.map(idx => AGENT_BANK[idx]);
-
+function renderDebatePage(scenario, agents, debateId) {
     return `
         <div class="page" data-page="debate">
             <div class="debate-page">
@@ -420,12 +419,11 @@ function renderDebatePage(scenario, selectedAgentIndices) {
                 <!-- Debate Controls -->
                 <div class="debate-controls">
                     <div class="round-indicator">
-                        <span id="current-round" style="font-weight: 600;">Round 1: Opening Arguments</span>
+                        <span id="current-round" style="font-weight: 600;">Connecting to debate...</span>
                         <div class="progress-bar" id="debate-progress">
-                            <div class="progress-fill" style="width: 33.33%;"></div>
+                            <div class="progress-fill" style="width: 0%;"></div>
                         </div>
                     </div>
-                    <button class="btn btn-primary" id="start-debate-simulation">▶ Start Debate</button>
                 </div>
 
                 <!-- Main Debate Container -->
@@ -435,12 +433,12 @@ function renderDebatePage(scenario, selectedAgentIndices) {
                         <h5 style="margin-bottom: var(--spacing-md); font-weight: 600;">Participating Agents</h5>
                         <div class="agents-list">
                             ${agents.map((agent, idx) => `
-                                <div class="agent-badge" data-agent-id="${AGENT_BANK.indexOf(agent)}">
+                                <div class="agent-badge">
                                     <span style="font-size: 1.5rem;">${agent.avatar}</span>
                                     <div class="badge-content">
                                         <div class="badge-name">${agent.name}</div>
                                         <div class="badge-role">${agent.role}</div>
-                                        <div class="badge-score" id="score-agent-${idx}">Score: 0</div>
+                                        <div class="badge-score" id="score-agent-${idx}">Score: --</div>
                                     </div>
                                 </div>
                             `).join('')}
@@ -452,7 +450,7 @@ function renderDebatePage(scenario, selectedAgentIndices) {
                         <div class="chat-messages" id="chat-messages">
                             <div class="chat-placeholder">
                                 <p style="font-size: 1.1rem; margin-bottom: var(--spacing-md);">💬 Debate Arena</p>
-                                <p style="color: var(--text-secondary);">Click "Start Debate" to begin the simulation. Watch as AI agents present their arguments, counterpoints, and rebuttals across three rounds.</p>
+                                <p style="color: var(--text-secondary);">Live debate streaming in progress. Watch as AI agents present their arguments across three rounds.</p>
                             </div>
                         </div>
                     </div>
@@ -491,15 +489,21 @@ function renderDebatePage(scenario, selectedAgentIndices) {
 }
 
 /**
- * Render Debate Results Page
+ * Render Debate Results Page with Chart.js
  */
-function renderResultsPage(scenario, selectedAgentIndices, results) {
-    const agents = selectedAgentIndices.map(idx => AGENT_BANK[idx]);
+function renderResultsPage(results) {
     const winner = results.winner;
-    const scores = results.scores;
+    const scores = results.scores || {};
+    const transcript = results.transcript || [];
+
+    const agentNames = Object.keys(scores);
+    const totalScores = agentNames.map(name => scores[name].total || 0);
+    const clarityScores = agentNames.map(name => scores[name].clarity || 0);
+    const evidenceScores = agentNames.map(name => scores[name].evidence || 0);
+    const ethicsScores = agentNames.map(name => scores[name].ethics || 0);
+    const persuasionScores = agentNames.map(name => scores[name].persuasion || 0);
 
     return `
-        <div class="page" data-page="results">
             <div class="results-page">
                 <!-- Header -->
                 <div class="results-header">
@@ -510,59 +514,194 @@ function renderResultsPage(scenario, selectedAgentIndices, results) {
                 <div class="results-container">
                     <!-- Winner Hero Card -->
                     <div class="winner-card">
-                        <div class="winner-icon">${winner.avatar}</div>
-                        <h3 style="margin-bottom: var(--spacing-sm);">${winner.name} Won!</h3>
-                        <div class="winner-role">${winner.role}</div>
-                        <div class="winner-score">Final Score: <strong>${results.winnerScore}/10</strong></div>
+                        <div class="winner-icon">🏆</div>
+                        <h3 style="margin-bottom: var(--spacing-sm);">${winner} Won!</h3>
+                        <div class="winner-score">Final Score: <strong>${(scores[winner]?.total || 0).toFixed(2)}/10</strong></div>
                         <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: var(--spacing-md);">
                             Best argued position based on Clarity, Evidence, Ethics, and Persuasion metrics.
                         </p>
                     </div>
 
-                    <!-- Scoring Breakdown -->
+                    <!-- Charts Section -->
+                    <div class="card" style="padding: var(--spacing-lg);">
+                        <div class="card-header">📊 Scoring Breakdown</div>
+                        
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: var(--spacing-lg); margin-top: var(--spacing-lg);">
+                            <!-- Bar Chart: Total Scores -->
+                            <div style="position: relative; height: 300px;">
+                                <canvas id="chart-total-scores"></canvas>
+                            </div>
+                            
+                            <!-- Radar Chart: Criteria Breakdown (Winner) -->
+                            <div style="position: relative; height: 300px;">
+                                <canvas id="chart-radar-winner"></canvas>
+                            </div>
+
+                            <!-- Radar Chart: All Agents -->
+                            <div style="position: relative; height: 300px;">
+                                <canvas id="chart-radar-all"></canvas>
+                            </div>
+
+                            <!-- Line Chart: Criteria Comparison -->
+                            <div style="position: relative; height: 300px;">
+                                <canvas id="chart-criteria-line"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Detailed Scores -->
                     <div class="card scored-breakdown">
-                        <div class="card-header">📊 Agent Scores</div>
+                        <div class="card-header">📋 Detailed Metrics</div>
                         <div class="scores-grid" id="scores-grid">
-                            ${agents.map((agent, idx) => {
-                                const score = scores[AGENT_BANK.indexOf(agent)];
+                            ${agentNames.map(agent => {
+                                const score = scores[agent] || {};
                                 return `
                                     <div class="score-item">
-                                        <div class="score-agent">
-                                            <span style="font-size: 1.2rem;">${agent.avatar}</span>
-                                            <div>
-                                                <div style="font-weight: 600; font-size: 0.95rem;">${agent.name}</div>
-                                                <div style="font-size: 0.85rem; color: var(--text-secondary);">${agent.role}</div>
+                                        <div>
+                                            <div style="font-weight: 600; font-size: 0.95rem;">${agent}</div>
+                                            <div style="font-size: 0.85rem; color: var(--text-secondary);">
+                                                C: ${score.clarity}/10 | E: ${score.evidence}/10
+                                            </div>
+                                            <div style="font-size: 0.85rem; color: var(--text-secondary);">
+                                                Et: ${score.ethics}/10 | P: ${score.persuasion}/10
                                             </div>
                                         </div>
-                                        <div class="score-value">${score}</div>
+                                        <div class="score-value">${(score.total || 0).toFixed(2)}</div>
                                     </div>
                                 `;
                             }).join('')}
                         </div>
                     </div>
 
-                    <!-- Policy Recommendation -->
-                    <div class="card policy-card">
-                        <div class="card-header">📋 Recommended Policy</div>
-                        <p style="line-height: 1.8; color: var(--text-secondary);">
-                            ${results.policyRecommendation || 'Based on the debate analysis, the consensus recommendation integrates ethical frameworks from all perspectives to balance innovation with safety considerations.'}
-                        </p>
-                    </div>
-
-                    <!-- Transcript Link -->
-                    <div style="display: flex; justify-content: center; gap: var(--spacing-md); margin-top: var(--spacing-lg);">
+                    <!-- Action Buttons -->
+                    <div style="display: flex; justify-content: center; gap: var(--spacing-md); margin-top: var(--spacing-lg); flex-wrap: wrap;">
                         <button class="btn btn-primary" id="view-transcript-btn">📝 View Full Transcript</button>
                         <button class="btn btn-outlined" id="export-pdf-btn">💾 Export as PDF</button>
                         <button class="btn btn-outlined" id="share-results-btn">🔗 Share Debate</button>
                     </div>
 
-                    <!-- Action Buttons -->
                     <div style="display: flex; justify-content: center; gap: var(--spacing-md); margin-top: var(--spacing-lg);">
                         <button class="btn btn-primary btn-large" id="restart-debate-btn">Start New Debate</button>
                         <button class="btn btn-text btn-large" id="home-btn">Return Home</button>
                     </div>
+
+                    <!-- Transcript (Collapsible) -->
+                    <div class="card" style="margin-top: var(--spacing-lg);">
+                        <div class="card-header" style="cursor: pointer;" id="transcript-header">
+                            📄 Full Transcript (Click to expand)
+                        </div>
+                        <div id="transcript-content" style="display: none; max-height: 500px; overflow-y: auto; margin-top: var(--spacing-md); padding: var(--spacing-md); background-color: var(--background); border-radius: var(--radius-md);">
+                            ${transcript.map(msg => `
+                                <div style="margin-bottom: var(--spacing-lg);">
+                                    <strong style="color: var(--primary);">${msg.agent} (Round ${msg.round}):</strong>
+                                    <p style="margin-top: var(--spacing-xs); color: var(--text-secondary);">${msg.text}</p>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
     `;
 }
+
+/**
+ * Render Chart.js visualizations
+ */
+function renderResultsCharts(data) {
+    const colors = ['#1976d2', '#ff9800', '#4caf50', '#f44336', '#2196f3'];
+    const bgColors = colors.map(c => c + '33');
+
+    // Total Scores Bar Chart
+    const totalCtx = document.getElementById('chart-total-scores');
+    if (totalCtx) {
+        new Chart(totalCtx, {
+            type: 'bar',
+            data: {
+                labels: data.agentNames,
+                datasets: [{
+                    label: 'Total Score',
+                    data: data.totalScores,
+                    backgroundColor: colors.slice(0, data.agentNames.length),
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: { legend: { display: false } },
+                scales: { x: { max: 10 } }
+            }
+        });
+    }
+
+    // Winner Radar Chart
+    const radarWinnerCtx = document.getElementById('chart-radar-winner');
+    if (radarWinnerCtx && data.scores[data.winner]) {
+        const winnerData = data.scores[data.winner];
+        new Chart(radarWinnerCtx, {
+            type: 'radar',
+            data: {
+                labels: ['Clarity', 'Evidence', 'Ethics', 'Persuasion'],
+                datasets: [{
+                    label: data.winner,
+                    data: [winnerData.clarity, winnerData.evidence, winnerData.ethics, winnerData.persuasion],
+                    borderColor: '#1976d2',
+                    backgroundColor: '#1976d233',
+                    pointBackgroundColor: '#1976d2'
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { r: { max: 10 } } }
+        });
+    }
+
+    // All Agents Radar
+    const radarAllCtx = document.getElementById('chart-radar-all');
+    if (radarAllCtx) {
+        new Chart(radarAllCtx, {
+            type: 'radar',
+            data: {
+                labels: ['Clarity', 'Evidence', 'Ethics', 'Persuasion'],
+                datasets: data.agentNames.map((agent, idx) => {
+                    const s = data.scores[agent] || {};
+                    return {
+                        label: agent,
+                        data: [s.clarity || 0, s.evidence || 0, s.ethics || 0, s.persuasion || 0],
+                        borderColor: colors[idx % colors.length],
+                        backgroundColor: bgColors[idx % bgColors.length],
+                        pointBackgroundColor: colors[idx % colors.length]
+                    };
+                })
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { r: { max: 10 } } }
+        });
+    }
+
+    // Criteria Line Chart
+    const lineCtx = document.getElementById('chart-criteria-line');
+    if (lineCtx) {
+        new Chart(lineCtx, {
+            type: 'line',
+            data: {
+                labels: data.agentNames,
+                datasets: [
+                    { label: 'Clarity', data: data.clarityScores, borderColor: '#1976d2', tension: 0.4 },
+                    { label: 'Evidence', data: data.evidenceScores, borderColor: '#ff9800', tension: 0.4 },
+                    { label: 'Ethics', data: data.ethicsScores, borderColor: '#4caf50', tension: 0.4 },
+                    { label: 'Persuasion', data: data.persuasionScores, borderColor: '#f44336', tension: 0.4 }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { y: { max: 10 } } }
+        });
+    }
+}
+// End of components.js
+console.log('✅ components.js fully loaded - all functions defined');
+console.log('   Functions available:', {
+    renderHomePage: typeof renderHomePage,
+    renderScenarioPage: typeof renderScenarioPage,
+    renderAgentConfigPage: typeof renderAgentConfigPage,
+    renderDebatePage: typeof renderDebatePage,
+    renderResultsPage: typeof renderResultsPage,
+    renderResultsCharts: typeof renderResultsCharts
+});

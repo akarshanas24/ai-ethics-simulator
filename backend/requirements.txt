@@ -1,0 +1,9 @@
+fastapi[all]
+uvicorn[standard]
+motor
+python-dotenv
+pydantic
+groq
+reportlab
+python-multipart
+aiofiles

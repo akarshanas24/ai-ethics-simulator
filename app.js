@@ -1,5 +1,138 @@
 // ==================== MAIN APP CONTROLLER ====================
 
+const API_BASE = 'http://localhost:8000';
+
+// Global error overlay to surface uncaught errors instead of a blank white page
+(function installErrorOverlay(){
+    function showOverlay(msg) {
+        try {
+            let ov = document.getElementById('js-error-overlay');
+            if (!ov) {
+                ov = document.createElement('div');
+                ov.id = 'js-error-overlay';
+                ov.style.position = 'fixed';
+                ov.style.top = '0';
+                ov.style.left = '0';
+                ov.style.right = '0';
+                ov.style.background = '#fff3f3';
+                ov.style.color = '#800';
+                ov.style.zIndex = 99999;
+                ov.style.padding = '12px';
+                ov.style.fontFamily = 'monospace';
+                ov.style.maxHeight = '40vh';
+                ov.style.overflow = 'auto';
+                document.body.appendChild(ov);
+            }
+            ov.innerText = msg;
+        } catch (e) {
+            console.error('Failed to show overlay', e);
+        }
+    }
+
+    window.addEventListener('error', function(ev){
+        const msg = `Uncaught Error: ${ev.message} at ${ev.filename}:${ev.lineno}:${ev.colno}`;
+        console.error(msg, ev.error);
+        showOverlay(msg + '\n' + (ev.error && ev.error.stack ? ev.error.stack : ''));
+    });
+
+    window.addEventListener('unhandledrejection', function(ev){
+        const reason = ev.reason || ev;
+        const msg = 'Unhandled Promise Rejection: ' + (reason && reason.message ? reason.message : String(reason));
+        console.error(msg, reason);
+        showOverlay(msg + '\n' + (reason && reason.stack ? reason.stack : ''));
+    });
+})();
+
+/**
+ * API Client
+ */
+const ApiClient = {
+    async createDebate(scenario, agentIndices, agents) {
+        try {
+            console.log('📤 Creating debate...', { scenario, agentIndices, agents });
+            const response = await fetch(`${API_BASE}/debates/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scenario, agent_indices: agentIndices, agents })
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            console.log('✅ Debate created:', data);
+            return data;
+        } catch (error) {
+            console.error('❌ Create debate failed:', error);
+            throw error;
+        }
+    },
+
+    async startDebate(debateId) {
+        try {
+            console.log('📤 Starting debate:', debateId);
+            const response = await fetch(`${API_BASE}/debates/${debateId}/start`, {
+                method: 'POST'
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            console.log('✅ Debate started:', data);
+            return data;
+        } catch (error) {
+            console.error('❌ Start debate failed:', error);
+            throw error;
+        }
+    },
+
+    streamDebate(debateId, onMessage) {
+        console.log('📡 Connecting to debate stream:', debateId);
+        const eventSource = new EventSource(`${API_BASE}/debates/${debateId}/stream`);
+        eventSource.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                console.log('📨 Stream event:', payload.type, payload);
+                onMessage(payload);
+            } catch (e) {
+                console.error('❌ Failed to parse message:', e);
+            }
+        };
+        eventSource.onerror = () => {
+            console.error('❌ SSE connection error');
+            eventSource.close();
+        };
+        eventSource.onopen = () => {
+            console.log('✅ SSE connection established');
+        };
+        return eventSource;
+    },
+
+    async getResults(debateId) {
+        try {
+            console.log('📤 Fetching results:', debateId);
+            const response = await fetch(`${API_BASE}/debates/${debateId}/results`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            console.log('✅ Results fetched:', data);
+            return data;
+        } catch (error) {
+            console.error('❌ Get results failed:', error);
+            throw error;
+        }
+    },
+
+    async getSummary(debateId) {
+        try {
+            const response = await fetch(`${API_BASE}/debates/${debateId}/summary`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        } catch (error) {
+            console.error('❌ Get summary failed:', error);
+            throw error;
+        }
+    },
+
+    async exportPDF(debateId) {
+        window.open(`${API_BASE}/debates/${debateId}/export-pdf`, '_blank');
+    }
+};
+
 /**
  * Application State Manager
  */
@@ -12,6 +145,8 @@ const AppState = {
     searchTerm: '',
     selectedCategory: 'All Categories',
     customScenarioMode: false,
+    currentDebateId: null,
+    currentEventSource: null,
 
     // Setters
     setPage(page) {
@@ -81,6 +216,13 @@ const AppState = {
  * Initialize App
  */
 function initApp() {
+    console.log('🚀 initApp() starting...');
+    console.log('✓ renderHomePage defined?', typeof renderHomePage);
+    console.log('✓ renderScenarioPage defined?', typeof renderScenarioPage);
+    console.log('✓ renderAgentConfigPage defined?', typeof renderAgentConfigPage);
+    console.log('✓ renderDebatePage defined?', typeof renderDebatePage);
+    console.log('✓ renderResultsPage defined?', typeof renderResultsPage);
+    
     const root = document.getElementById('root');
     
     // Render only home page and scenario page initially
@@ -327,43 +469,29 @@ function goToAgentConfig() {
  * Go to Debate Page
  */
 function goToDebate() {
-    // Update debate page with current state
-    const page = document.querySelector('[data-page="debate"]');
-    if (page && AppState.selectedScenario) {
-        const content = renderDebatePage(AppState.selectedScenario, AppState.selectedAgentIndices);
-        // Extract inner HTML by removing the outer div
-        const innerContent = content.substring(
-            content.indexOf('>') + 1,
-            content.lastIndexOf('</div>')
-        );
-        page.innerHTML = innerContent;
+    // Get current selections from AppState and call orchestration
+    if (!AppState.selectedScenario) {
+        showAlert('Please select a scenario first');
+        return;
     }
-
-    AppState.setPage('debate');
-
-    // Setup debate page events
-    setTimeout(() => setupDebatePageEvents(), 0);
+    if (AppState.selectedAgentIndices.length < 2) {
+        showAlert('Please select at least 2 agents');
+        return;
+    }
+    
+    // Call the real orchestration from debate-orchestration.js
+    startDebateOrchestration(AppState.selectedScenario, AppState.selectedAgentIndices);
 }
 
 /**
  * Go to Results Page
  */
 function goToResults(results) {
-    // Update results page with current state and results
     const page = document.querySelector('[data-page="results"]');
-    if (page && AppState.selectedScenario) {
-        const content = renderResultsPage(AppState.selectedScenario, AppState.selectedAgentIndices, results);
-        // Extract inner HTML by removing the outer div
-        const innerContent = content.substring(
-            content.indexOf('>') + 1,
-            content.lastIndexOf('</div>')
-        );
-        page.innerHTML = innerContent;
+    if (page) {
+        page.innerHTML = renderResultsPage(results);
     }
-
     AppState.setPage('results');
-
-    // Setup results page events
     setTimeout(() => setupResultsPageEvents(), 0);
 }
 
@@ -375,190 +503,17 @@ function setupDebatePageEvents() {
     const startBtn = document.getElementById('start-debate-simulation');
 
     backBtn?.addEventListener('click', () => {
+        if (AppState.currentEventSource) {
+            AppState.currentEventSource.close();
+        }
         AppState.setPage('agentConfig');
     });
 
     startBtn?.addEventListener('click', () => {
         startBtn.disabled = true;
         startBtn.textContent = '⏳ Debate in Progress...';
-        simulateDebate();
+        // Debate already started in goToDebate via backend
     });
-}
-
-/**
- * Simulate Debate (with mock data for now)
- */
-function simulateDebate() {
-    const chatMessages = document.getElementById('chat-messages');
-    const agents = AppState.selectedAgentIndices.map(idx => AGENT_BANK[idx]);
-    
-    // Clear placeholder
-    chatMessages.innerHTML = '';
-
-    // Mock debate messages
-    const rounds = [
-        { title: 'Round 1: Opening Arguments', messages: generateRound1Messages(agents) },
-        { title: 'Round 2: Rebuttals', messages: generateRound2Messages(agents) },
-        { title: 'Round 3: Closing Position', messages: generateRound3Messages(agents) }
-    ];
-
-    let currentRoundIndex = 0;
-    let messageIndex = 0;
-
-    function displayNextMessage() {
-        if (currentRoundIndex >= rounds.length) {
-            // Debate complete
-            finishDebateSimulation();
-            return;
-        }
-
-        const round = rounds[currentRoundIndex];
-        const msg = round.messages[messageIndex];
-
-        if (!msg) {
-            // Move to next round
-            currentRoundIndex++;
-            messageIndex = 0;
-            
-            if (currentRoundIndex < rounds.length) {
-                // Add round title
-                const roundTitle = document.createElement('div');
-                roundTitle.style.cssText = 'text-align: center; margin: var(--spacing-lg) 0; font-weight: 600; color: var(--primary); font-size: 1.1rem;';
-                roundTitle.textContent = rounds[currentRoundIndex].title;
-                chatMessages.appendChild(roundTitle);
-            }
-            
-            displayNextMessage();
-            return;
-        }
-
-        // Add message bubble
-        const bubble = createChatBubble(msg.agent, msg.text);
-        chatMessages.appendChild(bubble);
-        
-        // Update score
-        const scoreEl = document.getElementById(`score-agent-${AppState.selectedAgentIndices.indexOf(msg.agentIdx)}`);
-        if (scoreEl) {
-            scoreEl.textContent = `Score: ${msg.score}`;
-        }
-
-        messageIndex++;
-
-        // Auto-scroll to bottom
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-
-        // Display next message after delay
-        setTimeout(displayNextMessage, 2000);
-    }
-
-    // Start with round 1 title
-    const roundTitle = document.createElement('div');
-    roundTitle.style.cssText = 'text-align: center; margin: var(--spacing-lg) 0; font-weight: 600; color: var(--primary); font-size: 1.1rem;';
-    roundTitle.textContent = rounds[0].title;
-    chatMessages.appendChild(roundTitle);
-
-    displayNextMessage();
-}
-
-/**
- * Create chat bubble element
- */
-function createChatBubble(agent, text) {
-    const bubble = document.createElement('div');
-    bubble.className = 'chat-bubble';
-    bubble.innerHTML = `
-        <div style="font-size: 1.5rem; line-height: 1;">${agent.avatar}</div>
-        <div class="bubble-content">
-            <div class="bubble-agent">${agent.name}</div>
-            <div class="bubble-text">${text}</div>
-        </div>
-    `;
-    return bubble;
-}
-
-/**
- * Generate Round 1 messages
- */
-function generateRound1Messages(agents) {
-    const messages = [
-        {
-            agent: agents[0],
-            agentIdx: AppState.selectedAgentIndices[0],
-            text: `As the ${agents[0].role}, I believe we must prioritize ${['public safety and regulatory compliance', 'individual rights and privacy', 'sustainable business innovation', 'community well-being', 'technical feasibility'][AppState.selectedAgentIndices[0]]}. This scenario requires careful consideration of multiple stakeholder interests.`,
-            score: 7
-        },
-        {
-            agent: agents[1],
-            agentIdx: AppState.selectedAgentIndices[1],
-            text: `While I respect that perspective, the evidence clearly shows that ${['a balanced approach is needed', 'fundamental rights must never be compromised', 'innovation drives long-term value', 'grassroots solutions work best', 'technical limitations require honest discussion'][AppState.selectedAgentIndices[1]]}. We cannot ignore the implications for those most affected.`,
-            score: 8
-        },
-    ];
-    
-    if (agents[2]) {
-        messages.push({
-            agent: agents[2],
-            agentIdx: AppState.selectedAgentIndices[2],
-            text: `Excellent points from both perspectives. From my standpoint, the critical factor is ${['maintaining institutional trust', 'protecting vulnerable populations', 'creating sustainable solutions', 'ensuring democratic participation', 'implementing viable systems'][AppState.selectedAgentIndices[2]]}. We need a framework that serves all parties effectively.`,
-            score: 7
-        });
-    }
-
-    return messages;
-}
-
-/**
- * Generate Round 2 messages
- */
-function generateRound2Messages(agents) {
-    return agents.slice(0, 3).map((agent, idx) => ({
-        agent,
-        agentIdx: AppState.selectedAgentIndices[idx],
-        text: `I respectfully challenge the previous argument because ${['the data suggests a different approach', 'rights cannot be traded for convenience', 'practical implementation requires flexibility', 'participation levels show strong community support', 'technical standards exist for good reason'][AppState.selectedAgentIndices[idx]]}. Let me present evidence supporting my position...`,
-        score: 6 + Math.random() * 3
-    }));
-}
-
-/**
- * Generate Round 3 messages
- */
-function generateRound3Messages(agents) {
-    return agents.slice(0, 2).map((agent, idx) => ({
-        agent,
-        agentIdx: AppState.selectedAgentIndices[idx],
-        text: `In closing, my proposed policy recommendation is: ${['Establish clear regulatory frameworks with stakeholder oversight and regular review cycles', 'Enshrine individual consent requirements with independent auditing mechanisms', 'Create innovation-friendly rules that balance growth with accountability', 'Implement community-centered governance structures with transparent decision-making', 'Develop technical standards that are both rigorous and practically deployable'][AppState.selectedAgentIndices[idx]]}. This approach addresses the core concerns we've discussed.`,
-        score: 8
-    }));
-}
-
-/**
- * Finish Debate and Show Results
- */
-function finishDebateSimulation() {
-    // Mock results
-    const agents = AppState.selectedAgentIndices.map(idx => AGENT_BANK[idx]);
-    const scores = {};
-    
-    AppState.selectedAgentIndices.forEach((idx, pos) => {
-        scores[idx] = (7 + Math.random() * 3).toFixed(1);
-    });
-
-    const winnerIdx = AppState.selectedAgentIndices.reduce((maxIdx, idx, pos) => {
-        return parseFloat(scores[idx]) > parseFloat(scores[maxIdx]) ? idx : maxIdx;
-    });
-
-    const winner = AGENT_BANK[winnerIdx];
-
-    const mockResults = {
-        winner,
-        winnerScore: parseFloat(scores[winnerIdx]),
-        scores,
-        policyRecommendation: `Based on the debate consensus, the recommended approach combines ${winner.role}'s emphasis on ${['regulatory stability', 'rights protection', 'practical innovation', 'community needs', 'technical rigor'][winnerIdx]} with acknowledgment of alternative perspectives. Implementation should include stakeholder monitoring and adaptive governance mechanisms.`,
-        transcript: []
-    };
-
-    // Navigate to results page
-    goToResults(mockResults);
 }
 
 /**
@@ -568,32 +523,58 @@ function setupResultsPageEvents() {
     const backBtn = document.getElementById('results-back-btn');
     const restartBtn = document.getElementById('restart-debate-btn');
     const homeBtn = document.getElementById('home-btn');
-    const transcriptBtn = document.getElementById('view-transcript-btn');
-    const pdfBtn = document.getElementById('export-pdf-btn');
+    const transcriptHeader = document.getElementById('transcript-header');
+    const transcriptContent = document.getElementById('transcript-content');
+    const exportPdfBtn = document.getElementById('export-pdf-btn');
     const shareBtn = document.getElementById('share-results-btn');
+    const viewTranscriptBtn = document.getElementById('view-transcript-btn');
 
     backBtn?.addEventListener('click', () => {
         AppState.setPage('scenario');
+        if (AppState.currentEventSource) {
+            AppState.currentEventSource.close();
+        }
     });
 
     restartBtn?.addEventListener('click', () => {
         AppState.setPage('home');
+        if (AppState.currentEventSource) {
+            AppState.currentEventSource.close();
+        }
     });
 
     homeBtn?.addEventListener('click', () => {
         AppState.setPage('home');
+        if (AppState.currentEventSource) {
+            AppState.currentEventSource.close();
+        }
     });
 
-    transcriptBtn?.addEventListener('click', () => {
-        showAlert('View full transcript - Coming soon! Full debate will be displayed.');
+    transcriptHeader?.addEventListener('click', () => {
+        if (transcriptContent) {
+            transcriptContent.style.display = transcriptContent.style.display === 'none' ? 'block' : 'none';
+        }
     });
 
-    pdfBtn?.addEventListener('click', () => {
-        showAlert('PDF export functionality - Coming soon! Download debate results as PDF.');
+    viewTranscriptBtn?.addEventListener('click', () => {
+        if (transcriptContent) {
+            transcriptContent.style.display = transcriptContent.style.display === 'none' ? 'block' : 'none';
+        }
+    });
+
+    exportPdfBtn?.addEventListener('click', () => {
+        if (AppState.currentDebateId) {
+            ApiClient.exportPDF(AppState.currentDebateId);
+        }
     });
 
     shareBtn?.addEventListener('click', () => {
-        showAlert('Debate link copied to clipboard!\nShare URL: ' + window.location.href);
+        if (AppState.currentDebateId) {
+            const shareUrl = `${window.location.origin}?debate=${AppState.currentDebateId}`;
+            navigator.clipboard.writeText(shareUrl).then(() => {
+                alert('Debate link copied to clipboard!');
+            });
+        }
     });
 }
 
@@ -624,11 +605,26 @@ function setupAgentPageEvents() {
     });
 
     // Start debate button
-    startBtn?.addEventListener('click', () => {
-        if (AppState.selectedAgentIndices.length >= 2) {
-            goToDebate();
-        } else {
-            showAlert('Please select at least 2 agents to start the debate.');
+    startBtn?.addEventListener('click', async () => {
+        console.log('🟢 Start Debate clicked', {
+            scenario: AppState.selectedScenario,
+            agents: AppState.selectedAgentIndices
+        });
+        try {
+            if (AppState.selectedAgentIndices.length >= 2) {
+                // Call goToDebate and guard against exceptions
+                try {
+                    goToDebate();
+                } catch (e) {
+                    console.error('Error invoking goToDebate():', e);
+                    showAlert('Failed to start debate (internal). Check console for details.');
+                }
+            } else {
+                showAlert('Please select at least 2 agents to start the debate.');
+            }
+        } catch (err) {
+            console.error('Unhandled error in start button handler:', err);
+            showAlert('An unexpected error occurred. See console for details.');
         }
     });
 
